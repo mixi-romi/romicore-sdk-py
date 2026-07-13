@@ -1,0 +1,41 @@
+[project]
+name = "romicoresdk"
+version = "0.1.0"
+description = "RomiCore Python SDK - SDK for Romi, the conversational AI robot by MIXI"
+readme = "README.md"
+authors = [{ name = "MIXI, Inc." }]
+license = "MIT"
+requires-python = ">=3.13"
+dependencies = [
+    "cryptography>=46.0.5",
+    "paho-mqtt>=2.1.0",
+    "pydantic>=2.12.5",
+]
+
+[project.urls]
+Homepage = "https://romi.ai/"
+Repository = "https://github.com/mixi-romi/romicore-sdk-py"
+
+[build-system]
+requires = ["uv_build>=0.9.24,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "romicoresdk"
+
+[dependency-groups]
+dev = [
+    "mkdocstrings-python>=2.0.3",
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+    "pyyaml>=6.0.3",
+    "ruff>=0.14.11",
+    "ty>=0.0.11",
+    "zensical>=0.0.41",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

@@ -1,11 +1,13 @@
-# RomiCore Python SDK
+---
+icon: lucide/book-open
+---
 
-MIXI が作る [会話 AI ロボット "Romi"](https://romi.ai/) を制御するための Python SDK です。
-現在ベータ版として開発中です！ベータ版の期間、後方互換性は保証されないことをご留意ください。
+# RomiCore SDK API
 
-> [!IMPORTANT]
-> SDK 利用にはデイリーのレートリミットがあります。
-> レートリミットは毎日深夜 0:05 (JST) ごろにリセットされます。
+このページでは、MIXIが開発した会話AIロボット「Romi」を制御するためのSDK API仕様を提供しています。
+
+SDK を用いず直接 MQTT 通信を行うことも可能です。
+MQTT API については [AsyncAPI 仕様](https://mixi-romi.github.io/romicore-sdk-asyncapi/) を参照してください。
 
 ## SDK を使った開発
 
@@ -36,6 +38,7 @@ MIXI が作る [会話 AI ロボット "Romi"](https://romi.ai/) を制御する
    - 更新ボタンで状態を更新しつつ、`SDK Mode` が `Enabled` になるのを待ってください
    - Romi が起動後、1分以内には `Enabled` となるはずです
 4. `mDNS Host Name` が表示されるのでコピーする（後ほど使います）
+   - ネットワーク上でホスト名の衝突が発生した場合、`-2` などのサフィックスが付くことがあります
 
 ### 2. SDK 証明書の準備
 
@@ -116,9 +119,15 @@ uv sync
 ```python
 HOST = "<mDNS host name>"           # 手順1でコピーした .local で終わるホスト名
 BROKER_PORT = 443
-TARGET_ROMI_ID = "<Romi ID>"        # HOST から .local を除いたもの。romi-l01-<serial-no.> の形式
+TARGET_ROMI_ID = "<Romi ID>"        # romi-l01-<serial-no.> の形式
 CERTS_PATH = "<Path to certs dir>"  # client.key, client.crt, ca.crt があるパス
 ```
+
+!!! note "TARGET_ROMI_ID について"
+    mDNS Host Name から `.local` と衝突サフィックス（`-2`, `-3` など）を除いた文字列を使用します。
+
+    - 例1: `romi-l01-1234567890.local` → `romi-l01-1234567890`
+    - 例2: `romi-l01-1234567890-2.local` → `romi-l01-1234567890`
 
 その後、以下のコマンドで実行できます。
 
@@ -128,76 +137,9 @@ uv run examples/tool_calling.py
 
 ### 5. 証明書の更新
 
-> [!IMPORTANT]
-> デバイス証明書の期限は7日間です。
-> 証明書の期限切れを防ぐため、期限が近づいたら以下の方法で証明書を更新してください。
+!!! warning
+    デバイス証明書の期限は7日間です。
+    証明書の期限切れを防ぐため、期限が近づいたら以下の方法で証明書を更新してください。
 
 一度 Romi への接続が成功した後は、デバイス証明書を Romi 経由で更新することができます。
 更新方法については `examples/refresh_sdk_device_certificate.py` を参照してください。
-
-## ライブラリ開発
-
-### ブランチ戦略
-
-本レポジトリは Trunk Based Development によるブランチ戦略を採用しています。
-
-- `main` は常に動作する状態（CI が通る状態）を保ちます
-- 機能追加・修正は短命なブランチで行い、Pull Request 経由で `main` にマージしてください
-- `main` への直接 push は想定していません
-
-### 開発環境の準備
-
-このプロジェクトではパッケージ管理およびビルドツールとして `uv` を使用します。
-
-#### uv のインストール
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-#### プロジェクトのセットアップ
-
-```bash
-cd romicore-sdk-py
-uv sync
-```
-
-#### テストの実行
-
-```bash
-uv run pytest
-```
-
-#### 依存パッケージの追加
-
-```bash
-uv add <package_name>
-```
-
-#### ビルド
-
-配布用パッケージを作成します。
-実行後、`dist/` ディレクトリに `.whl` と `.tar.gz` が生成されます。
-
-```bash
-uv build
-```
-
-## AsyncAPI ドキュメント
-
-RomiCore SDK の MQTT API 仕様は AsyncAPI ドキュメントとして公開しています。
-
-- 公開ドキュメントサイト: <https://mixi-romi.github.io/romicore-sdk-asyncapi/>
-- 生成元リポジトリ: <https://github.com/mixi-romi/romicore-sdk-asyncapi>
-
-上記リポジトリは、本レポジトリを参照して AsyncAPI 仕様書（`asyncapi.yml`）とドキュメントサイトのビルドを行います。
-
-### JSON Schema 生成
-
-以下のコマンドで AsyncAPI 仕様の元となる JSON Schema を生成できます。
-
-```bash
-uv run ./tools/generate_json_schema.py
-```
-
-生成された `./schemas` は、SDK の payload 定義が変わると CI により `romicore-sdk-asyncapi` へ自動反映され、AsyncAPI ドキュメントが再生成されます。通常この手順を手動で実行する必要はありません。
