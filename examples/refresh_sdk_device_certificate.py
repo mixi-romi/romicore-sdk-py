@@ -7,9 +7,6 @@ import asyncio
 from pathlib import Path
 
 from romicoresdk import SDK
-from romicoresdk import (
-    RefreshSdkDeviceCertificateRequestData,
-)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -52,13 +49,9 @@ async def main():
 
     logging.info(f"Found target Romi: {romi.id}")
 
-    # SDKデバイス証明書のCSRを設定
-    request_data = RefreshSdkDeviceCertificateRequestData(
-        csr=csr_string,
-    )
     try:
         # RomiにSDKデバイス証明書の更新をリクエスト
-        response = await romi.refresh_sdk_device_certificate(request_data)
+        response = await romi.refresh_sdk_device_certificate(csr_string)
     except Exception as e:
         logging.error(f"Failed to refresh SDK device certificate: {e}")
         return

@@ -45,17 +45,17 @@ async def main() -> None:
 
     # Romi に登録済みのツール一覧を取得
     try:
-        response = await romi.get_registered_tools()
+        tool_names = await romi.get_registered_tools()
     except Exception as e:
         logging.error(f"Failed to get registered tools: {e}")
         return
 
     logging.info("Registered tools:")
-    if not response.tool_names:
+    if not tool_names:
         logging.info("  (none)")
         return
 
-    for tool_name in response.tool_names:
+    for tool_name in tool_names:
         logging.info(f"  - {tool_name}")
 
 

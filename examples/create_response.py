@@ -6,7 +6,6 @@ import asyncio
 from pathlib import Path
 
 from romicoresdk import SDK
-from romicoresdk import RomiResponseUserUtterance, CreateRomiResponseRequestData
 
 logging.basicConfig(level=logging.INFO)
 
@@ -45,24 +44,20 @@ async def main():
 
     logging.info(f"Found target Romi: {romi.id}")
 
-    # Romiユーザーの発話内容を設定（Romiがこれを聞いたこととする）
-    user_utterance = RomiResponseUserUtterance(
-        utterance="おはよう", should_include_in_conversation_log=True
-    )
-    # Romiが応答を生成するための指示を設定
-    response_data = CreateRomiResponseRequestData(
-        instruction="朝のあいさつをしてください。明るい内容で最後にユーザーへ軽い質問を1つしてください。",
-        user_utterance=user_utterance,
-    )
     try:
-        # Romiに発話をリクエスト
-        response = await romi.create_and_speak_response(response_data)
+        # Romiに発話をリクエスト（Romiユーザーの発話内容と応答生成の指示を渡す）
+        response = await romi.create_and_speak_response(
+            instruction="朝のあいさつをしてください。明るい内容で最後にユーザーへ軽い質問を1つしてください。",
+            user_utterance="おはよう",
+            should_include_user_utterance_in_conversation_log=True,
+        )
     except Exception as e:
         logging.error(f"Failed to create response: {e}")
         return
-    logging.info(
-        f"Romi response created and spoken: {response.text} (emotion: {response.emotion})"
-    )
+    for utterance in response.utterances:
+        logging.info(
+            f"Romi response created and spoken: {utterance.text} (emotion: {utterance.emotion})"
+        )
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ from typing import Annotated
 from pydantic import Field
 
 from .base import ResponseData
+from .capability import RomiCapability
 
 
 class DiscoverAvailableRomisResponseData(ResponseData):
@@ -11,3 +12,6 @@ class DiscoverAvailableRomisResponseData(ResponseData):
 
     model: Annotated[str, Field(title="Romiのモデル名")]
     serial_number: Annotated[str, Field(title="Romiのシリアルナンバー")]
+    capability: Annotated[
+        RomiCapability | None, Field(title="Romiのケイパビリティ情報")
+    ] = None

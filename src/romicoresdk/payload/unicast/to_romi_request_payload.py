@@ -27,6 +27,15 @@ class CreateRomiResponseRequestPayload(
 ): ...
 
 
+class CreateRomiResponseV2RequestPayload(
+    RequestPayload[
+        Literal[RequestType.CREATE_ROMI_RESPONSE_V2], CreateRomiResponseRequestData
+    ]
+):
+    """create_romi_response v2。リクエストの形状はv1と同一で、
+    レスポンス側のみutterancesリストへ変わる。"""
+
+
 class RemoveToolRequestPayload(
     RequestPayload[Literal[RequestType.REMOVE_TOOL], RemoveToolRequestData]
 ): ...
@@ -72,6 +81,7 @@ ToRomiRequestPayload = Annotated[
     AddToolRequestPayload
     | RemoveToolRequestPayload
     | CreateRomiResponseRequestPayload
+    | CreateRomiResponseV2RequestPayload
     | RefreshSdkDeviceCertificateRequestPayload
     | GetRegisteredToolsRequestPayload
     | StartConversationStreamRequestPayload
