@@ -5,6 +5,7 @@ import tempfile
 
 from romicoresdk import SDK
 from romicoresdk.romi import Romi
+from romicoresdk.sdk import SDK_PROTOCOL_VERSION
 from .mock.mqtt_mock import MqttMock
 from romicoresdk.payload.request_type import RequestType
 from romicoresdk.payload.error_info import ErrorInfo
@@ -18,10 +19,10 @@ from romicoresdk.payload.unicast.data.start_conversation_stream_request import (
 from romicoresdk.payload.unicast.data.stop_conversation_stream_request import (
     StopConversationStreamRequestData,
 )
-from romicoresdk import (
+from romicoresdk import ToolSkill
+from romicoresdk.payload.unicast.data.add_tool_request import (
     AddToolRequestData,
     ToolProperty,
-    ToolSkill,
 )
 from romicoresdk.payload.unicast.data.remove_tool_request import RemoveToolRequestData
 from romicoresdk.payload.event.data.requested_tool_call import RequestedToolCall
@@ -87,7 +88,27 @@ async def test_discover_romis_returns_list(monkeypatch, tmp_path) -> None:
             "request_type": "discover_available_romis",
             "ok": True,
             "error": {"code": "", "message": ""},
-            "data": {"model": "romi-l01", "serial_number": "0000000063"},
+            "data": {
+                "model": "romi-l01",
+                "serial_number": "0000000063",
+                "capability": {
+                    "protocol_version": 1,
+                    "firmware_version": "L.15.1.61",
+                    "to_romi_request": [
+                        {
+                            "name": "speak_text",
+                            "versions": [{"version": "1", "state": "active"}],
+                        }
+                    ],
+                    "resolved_from_romi_request": [
+                        {
+                            "name": "get_resource_url",
+                            "versions": [{"version": "1", "state": "active"}],
+                            "response_timeout_ms": 5000,
+                        }
+                    ],
+                },
+            },
         }
         await sdk._on_message_response(
             topic="romicoresdk/romi-l01-0000000063/py-sdk-testid/from_romi/response",
@@ -100,16 +121,63 @@ async def test_discover_romis_returns_list(monkeypatch, tmp_path) -> None:
     call = sdk._mqtt_client.publish.await_args
     assert call.kwargs["topic"] == "romicoresdk/broadcast/py-sdk-testid/request"
     actual_payload = json.loads(call.kwargs["payload"])
-    expected_payload = {
-        "request_id": "py-sdk-testid-0",
-        "request_type": "discover_available_romis",
-        "data": {},
-    }
-    assert actual_payload == expected_payload
+
+    # discover リクエストには SDK の capability 申告（from_romi_request）が載る。
+    assert actual_payload["request_id"] == "py-sdk-testid-0"
+    assert actual_payload["request_type"] == "discover_available_romis"
+    capability = actual_payload["data"]["capability"]
+    assert capability["protocol_version"] == SDK_PROTOCOL_VERSION
+    declared_from_romi = {entry["name"] for entry in capability["from_romi_request"]}
+    assert "get_resource_url" in declared_from_romi
 
     assert isinstance(romis, list)
     assert len(romis) > 0
     assert all(isinstance(romi, Romi) for romi in romis)
+
+
+def test_sdk_capability_declaration_serialization() -> None:
+    """SdkCapabilityDeclaration が discover 申告のワイヤ形式へ直列化される。"""
+    from romicoresdk.payload.broadcast.data.discover_available_romis_request import (
+        SdkCapabilityDeclaration,
+    )
+    from romicoresdk.payload.unicast.data.capability import (
+        CapabilityEntry,
+        CapabilityVersionState,
+        VersionDescriptor,
+    )
+
+    declaration = SdkCapabilityDeclaration(
+        protocol_version=1,
+        sdk_version="9.9.9",
+        from_romi_request=[
+            CapabilityEntry(
+                name="get_resource_url",
+                versions=[
+                    VersionDescriptor(version="1", state=CapabilityVersionState.ACTIVE)
+                ],
+            )
+        ],
+    )
+
+    dumped = declaration.model_dump(mode="json")
+    assert dumped["protocol_version"] == 1
+    assert dumped["sdk_version"] == "9.9.9"
+    assert dumped["from_romi_request"][0]["name"] == "get_resource_url"
+    assert dumped["from_romi_request"][0]["versions"] == [
+        {"version": "1", "state": "active", "sunset": None}
+    ]
+
+
+def test_sdk_capability_declaration_defaults() -> None:
+    """protocol_version/sdk_version は既定値を持ち、from_romi_request は空可。"""
+    from romicoresdk.payload.broadcast.data.discover_available_romis_request import (
+        SdkCapabilityDeclaration,
+    )
+
+    declaration = SdkCapabilityDeclaration()
+    assert declaration.protocol_version == 1
+    assert declaration.sdk_version is None
+    assert declaration.from_romi_request == []
 
 
 @pytest.mark.asyncio
@@ -299,8 +367,56 @@ async def test__send_unicast_request_error(monkeypatch, tmp_path) -> None:
     )
 
     with pytest.raises(
-        Exception,
+        RuntimeError,
         match="Romi romi-l01-0000000063 returned error: INVALID_ARGUMENT - property.description is required",
+    ):
+        await sdk._send_unicast_request(romi_id, request_type, tool)
+
+
+@pytest.mark.asyncio
+async def test__send_unicast_request_error_unspecified(monkeypatch, tmp_path) -> None:
+    """Romi がリクエストの payload パースに失敗し request_type を特定できず
+    ``unspecified`` のエラーレスポンスを返した場合でも、pending future が解決され
+    呼び出し側にエラーが伝播することを検証する。"""
+    monkeypatch.setattr("romicoresdk.sdk.generate_sdk_id", lambda: "py-sdk-testid")
+
+    sdk = SDK.create(HOST, BROKER_PORT, certs_dir=tmp_path, mqtt_client_class=MqttMock)
+    assert isinstance(sdk._mqtt_client, MqttMock)
+
+    async def fake_response(fut: asyncio.Future, timeout: float) -> None:
+        payload = {
+            "request_id": "py-sdk-testid-0",
+            "request_type": "unspecified",
+            "ok": False,
+            "error": {
+                "code": "INVALID_ARGUMENT",
+                "message": "failed to parse request payload",
+            },
+        }
+        await sdk._on_message_response(
+            topic="romicoresdk/romi-l01-0000000063/py-sdk-testid/from_romi/response",
+            payload=json.dumps(payload),
+        )
+
+    monkeypatch.setattr("romicoresdk.sdk.asyncio.wait_for", fake_response)
+
+    romi_id = "romi-l01-0000000063"
+    request_type = RequestType.ADD_TOOL
+    tool_prop = ToolProperty(
+        description="This is an example tool.",
+        parameters=None,
+        additional_base_instruction="Use this tool to demonstrate the RomiCore SDK.",
+        additional_response_instruction="Provide appropriate responses based on the tool.",
+        skill=ToolSkill.NO_OPERATION,
+    )
+    tool = AddToolRequestData(
+        name="Example Tool",
+        property=tool_prop,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Romi romi-l01-0000000063 returned error: INVALID_ARGUMENT - failed to parse request payload",
     ):
         await sdk._send_unicast_request(romi_id, request_type, tool)
 

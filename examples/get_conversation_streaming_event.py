@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 from romicoresdk import SDK
-from romicoresdk import StartConversationStreamRequestData, ConversationSpeaker
+from romicoresdk import ConversationSpeaker
 
 logging.basicConfig(level=logging.INFO)
 
@@ -38,9 +38,7 @@ async def main() -> None:
 
     try:
         # Romiへ発話ストリーミング開始要求
-        await romi.start_conversation_stream(
-            StartConversationStreamRequestData(speaker=ConversationSpeaker.ROMI)
-        )
+        await romi.start_conversation_stream(speaker=ConversationSpeaker.ROMI.value)
         logging.info("Started conversation stream. Waiting for events...")
         # 発話ストリーミング通知受信ループ
         while True:

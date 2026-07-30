@@ -8,11 +8,7 @@ import asyncio
 from pathlib import Path
 
 from romicoresdk import SDK
-from romicoresdk import (
-    AddToolRequestData,
-    ToolProperty,
-    ToolSkill,
-)
+from romicoresdk import ToolSkill
 
 logging.basicConfig(level=logging.INFO)
 
@@ -55,20 +51,16 @@ async def main():
     logging.info(f"Found target Romi: {romi.id}")
 
     # 画像をダウンロードして発話するツールを追加
-    tool_prop = ToolProperty(
-        description="画像をダウンロードして取得した画像を元にユーザーへのアドバイスや感想、共感を行うための判断材料にします。",
-        parameters=None,
-        additional_base_instruction="ユーザーが「ダウンロードして」と発話したら必ずdownload_pictureを必ず1回呼び出して新しい画像のみを解釈する。直前の画像が残っていても再利用しない。",
-        additional_response_instruction="直前のユーザーの画像情報を元に、画像に映っている内容について反応してください。",
-        skill=ToolSkill.DOWNLOAD_PICTURE,
-    )
-    tool = AddToolRequestData(
-        name="download_picture",
-        property=tool_prop,
-    )
     try:
         # Romi にツールを追加
-        await romi.add_tool(tool)
+        await romi.add_tool(
+            name="download_picture",
+            description="画像をダウンロードして取得した画像を元にユーザーへのアドバイスや感想、共感を行うための判断材料にします。",
+            parameters=None,
+            additional_base_instruction="ユーザーが「ダウンロードして」と発話したら必ずdownload_pictureを必ず1回呼び出して新しい画像のみを解釈する。直前の画像が残っていても再利用しない。",
+            additional_response_instruction="直前のユーザーの画像情報を元に、画像に映っている内容について反応してください。",
+            skill=ToolSkill.DOWNLOAD_PICTURE.value,
+        )
     except Exception as e:
         logging.error(f"Failed to add tool: {e}")
         return
@@ -86,8 +78,11 @@ async def main():
     )
 
     # リクエストに対して画像URLを含むレスポンスを返す
-    response = request.create_success_response(url=RESOURCE_URL)
-    await romi.respond_get_resource_url(response)
+    await romi.respond_get_resource_url_success(
+        request_id=request.request_id,
+        resource_id=request.resource_id,
+        url=RESOURCE_URL,
+    )
     logging.info("Responded to Get Resource URL Request.")
 
 

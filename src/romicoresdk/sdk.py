@@ -3,6 +3,7 @@ import logging
 import asyncio
 import secrets
 import base64
+from importlib.metadata import PackageNotFoundError, version as _package_version
 from typing import Awaitable, Callable, Generic, Self, TypeVar
 from pydantic import TypeAdapter, ValidationError
 from cryptography import x509
@@ -20,14 +21,20 @@ from .payload.unicast.from_romi_request_payload import FromRomiRequestPayload
 from .payload.event.event_payload import EventType, EventPayload, EventData
 from .payload.broadcast.data.discover_available_romis_request import (
     DiscoverAvailableRomisRequestData,
+    SdkCapabilityDeclaration,
 )
 from .payload.unicast.data.base import RequestData, ResponseData
+from .payload.unicast.data.capability import RomiCapability
+from .capability_table import SDK_CAPABILITY_TABLE, SdkCapabilityTable
 from .topic.topic_name_manager import TopicNameManager
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 SDK_ID_PREFIX = "py-sdk"
+
+# SDK が申告するプロトコルバージョン。
+SDK_PROTOCOL_VERSION = 1
 
 Handler = Callable[[str, dict], Awaitable[None]]
 
@@ -54,6 +61,7 @@ class SDK(Generic[RomiT]):
         # 既定 Romi は RomiT の既定（=Romi）に一致するが、型チェッカは
         # type[RomiT] への代入を一般には検証できないため抑制する。
         romi_class: type[RomiT] = Romi,  # ty: ignore[invalid-parameter-default]
+        sdk_capability_table: SdkCapabilityTable = SDK_CAPABILITY_TABLE,
     ):
         """SDK コンストラクタ
 
@@ -74,11 +82,16 @@ class SDK(Generic[RomiT]):
         romi_class : type[Romi], optional
             discover 時に生成する Romi クラス, by default Romi。
             サブクラスを注入することで Romi に独自メソッドを生やせる。
+        sdk_capability_table : SdkCapabilityTable, optional
+            discover リクエストで申告する SDK の対応 API テーブル,
+            by default SDK_CAPABILITY_TABLE。非公開 API を含む拡張テーブルを
+            注入することで、申告内容を差し替えられる。
         """
         self._mqtt_endpoint = endpoint
         self._tls_config = tls_config
         self._adapters = adapters
         self._romi_class = romi_class
+        self._sdk_capability_table = sdk_capability_table
 
         self._sdk_id = generate_sdk_id()
         self._topic_manager = TopicNameManager(self._sdk_id)
@@ -114,6 +127,7 @@ class SDK(Generic[RomiT]):
         mqtt_client_class: type[MqttProtocol] = MqttPahoTls,
         adapters: PayloadAdapters = DEFAULT_ADAPTERS,
         romi_class: type[RomiT] = Romi,  # ty: ignore[invalid-parameter-default]
+        sdk_capability_table: SdkCapabilityTable = SDK_CAPABILITY_TABLE,
     ) -> Self:
         """
         IPアドレスとポート、証明書ディレクトリパスからSDKを生成するファクトリメソッド
@@ -134,6 +148,9 @@ class SDK(Generic[RomiT]):
             ペイロードのパースアダプタ群, default DEFAULT_ADAPTERS
         romi_class : type[Romi], optional
             discover 時に生成する Romi クラス, default Romi
+        sdk_capability_table : SdkCapabilityTable, optional
+            discover リクエストで申告する SDK の対応 API テーブル,
+            default SDK_CAPABILITY_TABLE
         """
         if keepalive is None:
             endpoint = MqttEndpoint(host, broker_port)
@@ -152,6 +169,7 @@ class SDK(Generic[RomiT]):
             mqtt_client_class=mqtt_client_class,
             adapters=adapters,
             romi_class=romi_class,
+            sdk_capability_table=sdk_capability_table,
         )
 
     def register_request_handler(self, request_type: str, handler: Handler) -> None:
@@ -239,15 +257,23 @@ class SDK(Generic[RomiT]):
         request_id = f"{self._sdk_id}-{self._request_id_counter}"
         self._request_id_counter += 1
 
+        request_data = DiscoverAvailableRomisRequestData(
+            capability=SdkCapabilityDeclaration(
+                protocol_version=SDK_PROTOCOL_VERSION,
+                sdk_version=_get_sdk_version(),
+                from_romi_request=self._sdk_capability_table.from_romi_request,
+            )
+        )
+
         await self._mqtt_client.publish(
             topic=self._topic_manager.get_broadcast_request_topic(),
             payload=self._adapters.broadcast_request.validate_python(
                 {
                     "request_id": request_id,
                     "request_type": RequestType.DISCOVER_AVAILABLE_ROMIS,
-                    "data": DiscoverAvailableRomisRequestData(),
+                    "data": request_data,
                 }
-            ).model_dump_json(),
+            ).model_dump_json(exclude_none=True),
             qos=DEFAULT_QOS,
         )
 
@@ -367,13 +393,20 @@ class SDK(Generic[RomiT]):
         'discover_available_romis' メッセージのハンドラー
         """
         logger.debug("Handling 'discover_available_romis' message")
-        model = payload_dict.get("data", {}).get("model")
-        serial_number = payload_dict.get("data", {}).get("serial_number")
+        data = payload_dict.get("data", {})
+        model = data.get("model")
+        serial_number = data.get("serial_number")
+        capability_dict = data.get("capability")
         if serial_number is not None and model is not None:
+            if capability_dict is not None:
+                capability = RomiCapability.model_validate(capability_dict)
+            else:
+                capability = None
             self._discovered_romis.append(
                 self._romi_class(
                     model,
                     serial_number,
+                    capability,
                     self._send_unicast_request,
                     self._send_unicast_response,
                     self._get_event_future,
@@ -556,6 +589,18 @@ class SDK(Generic[RomiT]):
         # 3. CSRをPEM文字列として取得
         csr_pem = csr.public_bytes(serialization.Encoding.PEM).decode("utf-8")
         return csr_pem
+
+
+def _get_sdk_version() -> str | None:
+    """インストール済みパッケージから SDK バージョンを取得する。
+
+    discover 申告の ``sdk_version``（情報/ログ用）に載せる。取得できない場合
+    （未インストール等）は ``None`` を返す。
+    """
+    try:
+        return _package_version("romicoresdk")
+    except PackageNotFoundError:
+        return None
 
 
 def generate_sdk_id(nbytes: int = 5) -> str:

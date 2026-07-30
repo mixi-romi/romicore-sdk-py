@@ -6,7 +6,7 @@ import asyncio
 from pathlib import Path
 
 from romicoresdk import SDK
-from romicoresdk import SpeakTextRequestData, Emotion, Language
+from romicoresdk import Emotion, Language
 
 logging.basicConfig(level=logging.INFO)
 
@@ -45,17 +45,17 @@ async def main():
 
     logging.info(f"Found target Romi: {romi.id}")
 
-    request = SpeakTextRequestData(
-        emotion=Emotion.JOY, lang=Language.JPN, text="こんにちは、ロミィだよ！"
-    )
+    text = "こんにちは、ロミィだよ！"
 
     try:
         # Romiに発話をリクエスト
-        await romi.speak_text(request)
+        await romi.speak_text(
+            text=text, emotion=Emotion.JOY.value, lang=Language.JPN.value
+        )
     except Exception as e:
         logging.error(f"Failed to create response: {e}")
         return
-    logging.info(f"Romi is speaking text: {request.text}")
+    logging.info(f"Romi is speaking text: {text}")
 
 
 if __name__ == "__main__":

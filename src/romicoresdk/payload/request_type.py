@@ -11,6 +11,9 @@ class RequestType(StrEnum):
     ADD_TOOL = "add_tool"
     REMOVE_TOOL = "remove_tool"
     CREATE_ROMI_RESPONSE = "create_romi_response"
+    # create_romi_responseのレスポンスがtext/emotion単体からutterancesリストへ
+    # 変わった版。ネゴシエーションでv2が解決された場合にのみワイヤへ現れる。
+    CREATE_ROMI_RESPONSE_V2 = "create_romi_response_v2"
     REFRESH_SDK_DEVICE_CERTIFICATE = "refresh_sdk_device_certificate"
     GET_REGISTERED_TOOLS = "get_registered_tools"
     START_CONVERSATION_STREAM = "start_conversation_stream"
@@ -19,3 +22,7 @@ class RequestType(StrEnum):
 
     # Romi -> SDK へ送られてくるリクエスト
     GET_RESOURCE_URL = "get_resource_url"
+
+    # リクエストの payload パースに失敗し、Romi が request_type を特定できなかった
+    # 場合にエラーレスポンスへ設定される種別
+    UNSPECIFIED = "unspecified"

@@ -10,11 +10,7 @@ import asyncio
 from pathlib import Path
 
 from romicoresdk import SDK
-from romicoresdk import (
-    AddToolRequestData,
-    ToolProperty,
-    ToolSkill,
-)
+from romicoresdk import ToolSkill
 
 logging.basicConfig(level=logging.INFO)
 
@@ -57,41 +53,37 @@ async def main():
     logging.info(f"Found target Romi: {romi.id}")
 
     # Romi に「買い物リスト追加」のツールを登録
-    tool_prop = ToolProperty(
-        description="買い物リストにアイテムを追加します。",
-        parameters=json.dumps(
-            {
-                "type": "object",
-                "properties": {
-                    "item": {
-                        "type": "string",
-                        "description": "追加する商品名",
-                    },
-                    "quantity": {
-                        "type": "integer",
-                        "description": "個数",
-                        "default": 1,
-                    },
-                },
-                "required": ["item"],
-            }
-        ),
-        additional_base_instruction=(
-            "ユーザーが買い物リストへの追加を依頼した場合"
-            "（例：「牛乳を買い物リストに追加して」「卵3つ追加」「パンも買わなきゃ」など）に、"
-            "add_shopping_item を呼び出す。"
-        ),
-        additional_response_instruction=(
-            "買い物リストにアイテムを追加したことをユーザーに伝えてください。"
-        ),
-        skill=ToolSkill.NO_OPERATION,
-    )
-    tool = AddToolRequestData(
-        name="add_shopping_item",
-        property=tool_prop,
-    )
     try:
-        await romi.add_tool(tool)
+        await romi.add_tool(
+            name="add_shopping_item",
+            description="買い物リストにアイテムを追加します。",
+            parameters=json.dumps(
+                {
+                    "type": "object",
+                    "properties": {
+                        "item": {
+                            "type": "string",
+                            "description": "追加する商品名",
+                        },
+                        "quantity": {
+                            "type": "integer",
+                            "description": "個数",
+                            "default": 1,
+                        },
+                    },
+                    "required": ["item"],
+                }
+            ),
+            additional_base_instruction=(
+                "ユーザーが買い物リストへの追加を依頼した場合"
+                "（例：「牛乳を買い物リストに追加して」「卵3つ追加」「パンも買わなきゃ」など）に、"
+                "add_shopping_item を呼び出す。"
+            ),
+            additional_response_instruction=(
+                "買い物リストにアイテムを追加したことをユーザーに伝えてください。"
+            ),
+            skill=ToolSkill.NO_OPERATION.value,
+        )
     except Exception as e:
         logging.error(f"Failed to add tool: {e}")
         return

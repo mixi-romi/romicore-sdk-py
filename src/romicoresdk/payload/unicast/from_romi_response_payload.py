@@ -9,7 +9,10 @@ from ..generic_payload import (
 from .data.discover_available_romis_response import DiscoverAvailableRomisResponseData
 from .data.add_tool_response import AddToolResponseData
 from .data.remove_tool_response import RemoveToolResponseData
-from .data.create_romi_response_response import CreateRomiResponseResponseData
+from .data.create_romi_response_response import (
+    CreateRomiResponseResponseData,
+    CreateRomiResponseResponseDataV2,
+)
 from .data.refresh_sdk_device_certificate_response import (
     RefreshSdkDeviceCertificateResponseData,
 )
@@ -19,29 +22,31 @@ from .data.stop_conversation_stream_response import StopConversationStreamRespon
 from .data.speak_text_response import SpeakTextResponseData
 
 
-# このモジュール（from_romi のレスポンス）で扱う request_type の集合。
-# エラー payload はこの集合に絞ることで、方向違いの request_type を持つレスポンスを
-# ValidationError として検知できる（成功側と同じ集合を許容する）。
+# このモジュール（from_romi のレスポンス）のエラー payload で扱う request_type の集合。
+# 成功側の各種別に加え、Romi がリクエストの payload パースに失敗して request_type を
+# 特定できなかった場合の ``unspecified`` を許容する。方向違いの request_type を持つ
+# レスポンスは引き続き ValidationError として検知できる。
 _FromRomiResponseRequestType = Literal[
     RequestType.DISCOVER_AVAILABLE_ROMIS,
     RequestType.ADD_TOOL,
     RequestType.REMOVE_TOOL,
     RequestType.CREATE_ROMI_RESPONSE,
+    RequestType.CREATE_ROMI_RESPONSE_V2,
     RequestType.REFRESH_SDK_DEVICE_CERTIFICATE,
     RequestType.GET_REGISTERED_TOOLS,
     RequestType.START_CONVERSATION_STREAM,
     RequestType.STOP_CONVERSATION_STREAM,
     RequestType.SPEAK_TEXT,
+    RequestType.UNSPECIFIED,
 ]
 
 
 class ErrorResponsePayload(_ErrorResponsePayloadBase[_FromRomiResponseRequestType]):
     """from_romi レスポンス共通のエラー payload。
 
-    エラー時の構造は ``request_type`` 以外すべての API で同一のため、API ごとに
-    クラスを分けず単一の payload に集約する。``request_type`` はこのモジュールが扱う
-    種別（成功側と同じ集合）に限定し、方向違いのレスポンスを受理しないようにする。
-    トップレベルの ``ok`` discriminator により、成功ユニオンと排他に振り分けられる。
+    エラー時の構造は ``request_type`` 以外すべての API で同一のため単一の payload に
+    集約する。許容する ``request_type`` は ``_FromRomiResponseRequestType`` を参照。
+    トップレベルの ``ok`` discriminator により成功ユニオンと排他に振り分けられる。
     """
 
 
@@ -69,6 +74,13 @@ class RemoveToolResponseSuccessPayload(
 class CreateRomiResponseSuccessPayload(
     SuccessResponsePayload[
         Literal[RequestType.CREATE_ROMI_RESPONSE], CreateRomiResponseResponseData
+    ]
+): ...
+
+
+class CreateRomiResponseV2SuccessPayload(
+    SuccessResponsePayload[
+        Literal[RequestType.CREATE_ROMI_RESPONSE_V2], CreateRomiResponseResponseDataV2
     ]
 ): ...
 
@@ -136,6 +148,7 @@ FromRomiResponseSuccessPayload = Annotated[
     | AddToolResponseSuccessPayload
     | RemoveToolResponseSuccessPayload
     | CreateRomiResponseSuccessPayload
+    | CreateRomiResponseV2SuccessPayload
     | RefreshSdkDeviceCertificateResponseSuccessPayload
     | GetRegisteredToolsResponseSuccessPayload
     | StartConversationStreamResponseSuccessPayload
