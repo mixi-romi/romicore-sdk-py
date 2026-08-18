@@ -2,6 +2,8 @@ from typing import Protocol, Callable, Coroutine, Any
 from dataclasses import dataclass
 
 MessageHandler = Callable[[str, str], Coroutine[Any, Any, None]]
+# 再接続を検知したときに呼ばれるハンドラ。初回接続では呼ばれない。
+ConnectedHandler = Callable[[], Coroutine[Any, Any, None]]
 
 
 @dataclass
@@ -26,6 +28,21 @@ class TlsConfig:
     client_keyfile_path: str
 
 
+@dataclass
+class Will:
+    """
+    LWT (Last Will and Testament) の設定を保持するデータクラスです
+
+    クライアントが正常な DISCONNECT を経ずに切断した場合に、
+    ブローカーが代理でパブリッシュするメッセージを表します。
+    """
+
+    topic: str
+    payload: str
+    qos: int = 0
+    retain: bool = False
+
+
 class MqttProtocol(Protocol):
     """
     MQTT通信するためのプロトコルクラスです
@@ -39,3 +56,5 @@ class MqttProtocol(Protocol):
     ) -> None: ...
     async def unsubscribe(self, topic: str) -> None: ...
     def is_connected(self) -> bool: ...
+    def set_will(self, will: Will) -> None: ...
+    def set_on_connected(self, handler: ConnectedHandler) -> None: ...

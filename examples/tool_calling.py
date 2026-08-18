@@ -29,88 +29,90 @@ async def main():
     # TLS 鍵を指定して SDK インスタンスを生成
     sdk = SDK.create(HOST, BROKER_PORT, certs_dir=Path(CERTS_PATH))
 
-    # MQTT ブローカーに接続する
-    try:
-        await sdk.connect()
-    except Exception as e:
-        logging.error(f"Failed to connect to MQTT broker: {e}")
-        return
+    # ブロックを抜けるときに Romi へ切断を通知してから接続を閉じる
+    async with sdk:
+        # MQTT ブローカーに接続する
+        try:
+            await sdk.connect()
+        except Exception as e:
+            logging.error(f"Failed to connect to MQTT broker: {e}")
+            return
 
-    # ブローカーに接続されている SDK-mode が有効な Romi を検出
-    romi_list = await sdk.discover_romis(timeout=5)
+        # ブローカーに接続されている SDK-mode が有効な Romi を検出
+        romi_list = await sdk.discover_romis(timeout=5)
 
-    # 対象の Romi を検索
-    romi = None
-    for r in romi_list:
-        if r.id == TARGET_ROMI_ID:
-            romi = r
-            break
+        # 対象の Romi を検索
+        romi = None
+        for r in romi_list:
+            if r.id == TARGET_ROMI_ID:
+                romi = r
+                break
 
-    if romi is None:
-        logging.error(f"Target Romi '{TARGET_ROMI_ID}' not found.")
-        return
+        if romi is None:
+            logging.error(f"Target Romi '{TARGET_ROMI_ID}' not found.")
+            return
 
-    logging.info(f"Found target Romi: {romi.id}")
+        logging.info(f"Found target Romi: {romi.id}")
 
-    # Romi に「買い物リスト追加」のツールを登録
-    try:
-        await romi.add_tool(
-            name="add_shopping_item",
-            description="買い物リストにアイテムを追加します。",
-            parameters=json.dumps(
-                {
-                    "type": "object",
-                    "properties": {
-                        "item": {
-                            "type": "string",
-                            "description": "追加する商品名",
+        # Romi に「買い物リスト追加」のツールを登録
+        try:
+            await romi.add_tool(
+                name="add_shopping_item",
+                description="買い物リストにアイテムを追加します。",
+                parameters=json.dumps(
+                    {
+                        "type": "object",
+                        "properties": {
+                            "item": {
+                                "type": "string",
+                                "description": "追加する商品名",
+                            },
+                            "quantity": {
+                                "type": "integer",
+                                "description": "個数",
+                                "default": 1,
+                            },
                         },
-                        "quantity": {
-                            "type": "integer",
-                            "description": "個数",
-                            "default": 1,
-                        },
-                    },
-                    "required": ["item"],
-                }
-            ),
-            additional_base_instruction=(
-                "ユーザーが買い物リストへの追加を依頼した場合"
-                "（例：「牛乳を買い物リストに追加して」「卵3つ追加」「パンも買わなきゃ」など）に、"
-                "add_shopping_item を呼び出す。"
-            ),
-            additional_response_instruction=(
-                "買い物リストにアイテムを追加したことをユーザーに伝えてください。"
-            ),
-            skill=ToolSkill.NO_OPERATION.value,
-        )
-    except Exception as e:
-        logging.error(f"Failed to add tool: {e}")
-        return
-    logging.info("Tool 'add_shopping_item' registered.")
+                        "required": ["item"],
+                    }
+                ),
+                additional_base_instruction=(
+                    "ユーザーが買い物リストへの追加を依頼した場合"
+                    "（例：「牛乳を買い物リストに追加して」「卵3つ追加」「パンも買わなきゃ」など）に、"
+                    "add_shopping_item を呼び出す。"
+                ),
+                additional_response_instruction=(
+                    "買い物リストにアイテムを追加したことをユーザーに伝えてください。"
+                ),
+                skill=ToolSkill.NO_OPERATION.value,
+            )
+        except Exception as e:
+            logging.error(f"Failed to add tool: {e}")
+            return
+        logging.info("Tool 'add_shopping_item' registered.")
 
-    # ツール呼び出しリクエストを無限ループで待機
-    logging.info("Waiting for tool call requests... (Ctrl+C to stop)")
-    try:
-        while True:
-            requested_tool_call = await romi.wait_for_tool_call()
+        # ツール呼び出しリクエストを無限ループで待機
+        logging.info("Waiting for tool call requests... (Ctrl+C to stop)")
+        try:
+            while True:
+                requested_tool_call = await romi.wait_for_tool_call()
 
-            # 引数を JSON からパース
-            args = json.loads(requested_tool_call.arguments_json)
-            item = args.get("item", "不明")
-            quantity = args.get("quantity", 1)
+                # 引数を JSON からパース
+                args = json.loads(requested_tool_call.arguments_json)
+                item = args.get("item", "不明")
+                quantity = args.get("quantity", 1)
 
-            # 買い物リストに追加
-            shopping_list.append({"item": item, "quantity": quantity})
-            logging.info(f"Added: {item} x{quantity}")
+                # 買い物リストに追加
+                shopping_list.append({"item": item, "quantity": quantity})
+                logging.info(f"Added: {item} x{quantity}")
 
-            # 現在の買い物リストを表示
-            logging.info("--- Shopping List ---")
-            for i, entry in enumerate(shopping_list, 1):
-                logging.info(f"  {i}. {entry['item']} x{entry['quantity']}")
-            logging.info("---------------------")
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        logging.info("Stopped by user.")
+                # 現在の買い物リストを表示
+                logging.info("--- Shopping List ---")
+                for i, entry in enumerate(shopping_list, 1):
+                    logging.info(f"  {i}. {entry['item']} x{entry['quantity']}")
+                logging.info("---------------------")
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            logging.info("Stopped by user.")
 
 
 if __name__ == "__main__":

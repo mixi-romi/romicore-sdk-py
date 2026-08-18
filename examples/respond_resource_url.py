@@ -27,63 +27,65 @@ async def main():
     # TLS 鍵を指定して SDK インスタンスを生成
     sdk = SDK.create(HOST, BROKER_PORT, certs_dir=Path(CERTS_PATH))
 
-    # MQTT ブローカーに接続する
-    try:
-        await sdk.connect()
-    except Exception as e:
-        logging.error(f"Failed to connect to MQTT broker: {e}")
-        return
+    # ブロックを抜けるときに Romi へ切断を通知してから接続を閉じる
+    async with sdk:
+        # MQTT ブローカーに接続する
+        try:
+            await sdk.connect()
+        except Exception as e:
+            logging.error(f"Failed to connect to MQTT broker: {e}")
+            return
 
-    # ブローカーに接続されている SDK-mode が有効な Romi を検出
-    romi_list = await sdk.discover_romis(timeout=5)
+        # ブローカーに接続されている SDK-mode が有効な Romi を検出
+        romi_list = await sdk.discover_romis(timeout=5)
 
-    # 対象の Romi を検索
-    romi = None
-    for r in romi_list:
-        if r.id == TARGET_ROMI_ID:
-            romi = r
-            break
+        # 対象の Romi を検索
+        romi = None
+        for r in romi_list:
+            if r.id == TARGET_ROMI_ID:
+                romi = r
+                break
 
-    if romi is None:
-        logging.error(f"Target Romi '{TARGET_ROMI_ID}' not found.")
-        return
+        if romi is None:
+            logging.error(f"Target Romi '{TARGET_ROMI_ID}' not found.")
+            return
 
-    logging.info(f"Found target Romi: {romi.id}")
+        logging.info(f"Found target Romi: {romi.id}")
 
-    # 画像をダウンロードして発話するツールを追加
-    try:
-        # Romi にツールを追加
-        await romi.add_tool(
-            name="download_picture",
-            description="画像をダウンロードして取得した画像を元にユーザーへのアドバイスや感想、共感を行うための判断材料にします。",
-            parameters=None,
-            additional_base_instruction="ユーザーが「ダウンロードして」と発話したら必ずdownload_pictureを必ず1回呼び出して新しい画像のみを解釈する。直前の画像が残っていても再利用しない。",
-            additional_response_instruction="直前のユーザーの画像情報を元に、画像に映っている内容について反応してください。",
-            skill=ToolSkill.DOWNLOAD_PICTURE.value,
+        # 画像をダウンロードして発話するツールを追加
+        try:
+            # Romi にツールを追加
+            await romi.add_tool(
+                name="download_picture",
+                description="画像をダウンロードして取得した画像を元にユーザーへのアドバイスや感想、共感を行うための判断材料にします。",
+                parameters=None,
+                additional_base_instruction="ユーザーが「ダウンロードして」と発話したら必ずdownload_pictureを必ず1回呼び出して新しい画像のみを解釈する。直前の画像が残っていても再利用しない。",
+                additional_response_instruction="直前のユーザーの画像情報を元に、画像に映っている内容について反応してください。",
+                skill=ToolSkill.DOWNLOAD_PICTURE.value,
+            )
+        except Exception as e:
+            logging.error(f"Failed to add tool: {e}")
+            return
+        logging.info("Tool added successfully.")
+
+        # ツール呼び出しの結果として、RomiからリソースURL取得リクエストが来るのを待機
+        try:
+            request = await romi.wait_for_get_resource_url_request()
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            logging.info("Stopped by user.")
+            return
+        logging.info(
+            f"Received Get Resource URL Request: "
+            f"resource_id={request.resource_id}, type={request.resource_type}"
         )
-    except Exception as e:
-        logging.error(f"Failed to add tool: {e}")
-        return
-    logging.info("Tool added successfully.")
 
-    # ツール呼び出しの結果として、RomiからリソースURL取得リクエストが来るのを待機
-    try:
-        request = await romi.wait_for_get_resource_url_request()
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        logging.info("Stopped by user.")
-        return
-    logging.info(
-        f"Received Get Resource URL Request: "
-        f"resource_id={request.resource_id}, type={request.resource_type}"
-    )
-
-    # リクエストに対して画像URLを含むレスポンスを返す
-    await romi.respond_get_resource_url_success(
-        request_id=request.request_id,
-        resource_id=request.resource_id,
-        url=RESOURCE_URL,
-    )
-    logging.info("Responded to Get Resource URL Request.")
+        # リクエストに対して画像URLを含むレスポンスを返す
+        await romi.respond_get_resource_url_success(
+            request_id=request.request_id,
+            resource_id=request.resource_id,
+            url=RESOURCE_URL,
+        )
+        logging.info("Responded to Get Resource URL Request.")
 
 
 if __name__ == "__main__":

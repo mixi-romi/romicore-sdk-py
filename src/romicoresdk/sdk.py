@@ -12,14 +12,23 @@ from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
 
 from .romi import Romi
-from .mqtt.mqtt_protocol import MqttProtocol, MqttEndpoint, TlsConfig
+from .mqtt.mqtt_protocol import MqttProtocol, MqttEndpoint, TlsConfig, Will
 from .mqtt.mqtt_paho_tls import MqttPahoTls
 from .payload.request_type import RequestType
 from .payload.error_info import ErrorInfo
 from .payload.adapters import PayloadAdapters, DEFAULT_ADAPTERS
 from .payload.unicast.from_romi_request_payload import FromRomiRequestPayload
-from .payload.event.event_payload import EventType
+from .payload.event.event_payload import (
+    ConnectionStatusChangedEventPayload,
+    EventPayload,
+    EventType,
+)
 from .payload.event.data.base import EventData
+from .payload.event.data.connection_status import (
+    OfflineReason,
+    OfflineStatusData,
+    OnlineStatusData,
+)
 from .payload.broadcast.data.discover_available_romis_request import (
     DiscoverAvailableRomisRequestData,
     SdkCapabilityDeclaration,
@@ -97,6 +106,7 @@ class SDK(Generic[RomiT]):
         self._sdk_id = generate_sdk_id()
         self._topic_manager = TopicNameManager(self._sdk_id)
         self._request_id_counter = 0
+        self._event_id_counter = 0
         self._pending_requests: dict[str, asyncio.Future] = {}
         self._waiting_events: dict[EventType, asyncio.Future[EventData]] = {}
         self._waiting_requests: dict[
@@ -201,11 +211,33 @@ class SDK(Generic[RomiT]):
         """SDKの接続
         SDK を MQTT ブローカーに接続します。
 
+        接続後、イベントトピックへ ``online`` を通知します。
+        また、異常切断時に ``offline`` が Romi へ届くよう、接続前に LWT
+        (Last Will and Testament) を登録します。
+
         Parameters
         ----------
         timeout : float, optional
             接続タイムアウト秒数, by default 10.0
         """
+        if not self._mqtt_client.is_connected():
+            # LWT は CONNECT パケットに載せるため、接続前に登録する。
+            self._mqtt_client.set_will(
+                Will(
+                    topic=self._topic_manager.get_publish_event_topic(),
+                    payload=ConnectionStatusChangedEventPayload(
+                        type=EventType.CONNECTION_STATUS_CHANGED,
+                        event_id=self._next_event_id(),
+                        data=OfflineStatusData(reason=OfflineReason.LAST_WILL),
+                    ).model_dump_json(),
+                    qos=DEFAULT_QOS,
+                    retain=False,
+                )
+            )
+            # 自動再接続では connect() が呼ばれないため、購読と online 通知の
+            # やり直しをコールバックへ委譲する。
+            self._mqtt_client.set_on_connected(self._on_reconnected)
+
         # Connect to MQTT broker
         logger.debug(
             f"Connecting to MQTT broker at {self._mqtt_endpoint.host}:{self._mqtt_endpoint.port}..."
@@ -217,6 +249,53 @@ class SDK(Generic[RomiT]):
             f"Connected to MQTT broker. {self._mqtt_endpoint.host}:{self._mqtt_endpoint.port}"
         )
 
+        # 初回接続の購読と online 通知は、失敗を呼び出し元へ伝播させるため
+        # ここで同期的に待つ。
+        await self._setup_session()
+
+    async def disconnect(self) -> None:
+        """SDKの切断
+        SDK を MQTT ブローカーから切断します。
+
+        切断前に ``offline`` (reason: ``shutdown``) を Romi へ通知します。
+        このメソッドを呼ばずにプロセスが終了した場合は、ブローカーが LWT を
+        発火するため reason が ``last_will`` になります。
+        """
+        if self._mqtt_client.is_connected():
+            try:
+                await self._send_event(
+                    ConnectionStatusChangedEventPayload(
+                        type=EventType.CONNECTION_STATUS_CHANGED,
+                        event_id=self._next_event_id(),
+                        data=OfflineStatusData(reason=OfflineReason.SHUTDOWN),
+                    )
+                )
+            except Exception as e:
+                # 通知に失敗しても切断は続行する（ブローカー側で LWT が発火する）
+                logger.warning(f"Failed to publish offline status: {e}")
+
+        await self._mqtt_client.disconnect()
+
+        logger.info("Disconnected from MQTT broker.")
+
+    async def __aenter__(self) -> Self:
+        """``async with`` のエントリ。
+
+        接続は行いません。タイムアウトを指定できるよう、``connect()`` は
+        ブロック内で明示的に呼んでください。
+        """
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        """``async with`` の終了時に切断します。"""
+        await self.disconnect()
+
+    async def _setup_session(self) -> None:
+        """購読を（再）確立し、``online`` を通知します。
+
+        初回接続と自動再接続の両方から呼ばれます。clean session のため
+        再接続時には購読が失われており、張り直しが必要です。
+        """
         # Subscribe to response and event topics
         for topic, handler in [
             (
@@ -232,6 +311,18 @@ class SDK(Generic[RomiT]):
             await self._mqtt_client.subscribe(
                 topic=topic, message_handler=handler, qos=DEFAULT_QOS
             )
+
+        await self._send_event(
+            ConnectionStatusChangedEventPayload(
+                type=EventType.CONNECTION_STATUS_CHANGED,
+                event_id=self._next_event_id(),
+                data=OnlineStatusData(),
+            )
+        )
+
+    async def _on_reconnected(self) -> None:
+        """自動再接続を検知したときの処理。"""
+        await self._setup_session()
 
     async def discover_romis(self, timeout: int = 5) -> list[RomiT]:
         """Romi を見つける
@@ -370,7 +461,7 @@ class SDK(Generic[RomiT]):
 
         # parse topic
         if not self._topic_manager.parse_event_topic(topic):
-            logger.warning(f"Received event message on invalid topic: {topic}")
+            logger.debug(f"Ignoring event message not sent by a Romi: {topic}")
             return
 
         # parse payload
@@ -511,6 +602,30 @@ class SDK(Generic[RomiT]):
         await self._mqtt_client.publish(
             topic=topic,
             payload=payload,
+            qos=DEFAULT_QOS,
+        )
+
+    def _next_event_id(self) -> str:
+        """SDK が送るイベントの ID を採番します。"""
+        event_id = f"{self._sdk_id}-{self._event_id_counter}"
+        self._event_id_counter += 1
+        return event_id
+
+    async def _send_event(self, payload: EventPayload) -> None:
+        """イベントを SDK のイベントトピックへ送信します。
+
+        Parameters
+        ----------
+        payload : EventPayload
+            送信するイベントのペイロード
+        """
+        topic = self._topic_manager.get_publish_event_topic()
+
+        logger.debug(f"Sending '{payload.type}' event on topic '{topic}'")
+
+        await self._mqtt_client.publish(
+            topic=topic,
+            payload=payload.model_dump_json(),
             qos=DEFAULT_QOS,
         )
 

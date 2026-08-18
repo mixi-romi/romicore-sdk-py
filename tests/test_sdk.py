@@ -1,6 +1,7 @@
 import pytest
 import json
 import asyncio
+import logging
 import tempfile
 
 from romicoresdk import SDK
@@ -625,3 +626,222 @@ async def test_generate_csr(tmp_path) -> None:
         import os
 
         os.unlink(key_path)
+
+
+# --- 接続状態通知のテスト -----------------------------------------------------
+
+OWN_EVENT_TOPIC = "romicoresdk/py-sdk-testid/event"
+
+
+def _make_sdk(monkeypatch, tmp_path, **kwargs) -> SDK:
+    """MqttMock を注入した SDK を組み立てるテスト用ヘルパー。"""
+    monkeypatch.setattr("romicoresdk.sdk.generate_sdk_id", lambda: "py-sdk-testid")
+    return SDK.create(
+        HOST, BROKER_PORT, certs_dir=tmp_path, mqtt_client_class=MqttMock, **kwargs
+    )
+
+
+def _status_publishes(publish_mock) -> list[dict]:
+    """publish 呼び出しから SDK 自身のイベントトピック宛の payload を取り出す。"""
+    return [
+        json.loads(c.kwargs["payload"])
+        for c in publish_mock.await_args_list
+        if c.kwargs["topic"] == OWN_EVENT_TOPIC
+    ]
+
+
+@pytest.mark.asyncio
+async def test_connect_registers_will_before_connecting(monkeypatch, tmp_path) -> None:
+    """LWT は CONNECT より前に、offline/last_will の payload で登録される。"""
+    sdk = _make_sdk(monkeypatch, tmp_path)
+    assert isinstance(sdk._mqtt_client, MqttMock)
+
+    # LWT は CONNECT 時にブローカーへ渡されるため、connect の時点で
+    # 登録済みでなければならない。
+    will_set_before_connect = False
+
+    original_connect = sdk._mqtt_client.connect.side_effect
+
+    async def record_connect(timeout: float) -> None:
+        nonlocal will_set_before_connect
+        will_set_before_connect = sdk._mqtt_client.set_will.called
+        await original_connect(timeout)
+
+    sdk._mqtt_client.connect.side_effect = record_connect
+
+    await sdk.connect()
+
+    assert will_set_before_connect is True
+    sdk._mqtt_client.set_will.assert_called_once()
+    will = sdk._mqtt_client.set_will.call_args.args[0]
+    assert will.topic == OWN_EVENT_TOPIC
+    assert json.loads(will.payload) == {
+        "event_id": "py-sdk-testid-0",
+        "type": "connection_status_changed",
+        "data": {"status": "offline", "reason": "last_will"},
+    }
+    assert will.qos == 1
+    assert will.retain is False
+
+
+@pytest.mark.asyncio
+async def test_connect_publishes_online_status(monkeypatch, tmp_path) -> None:
+    """接続後に online がイベントトピックへ publish される。"""
+    sdk = _make_sdk(monkeypatch, tmp_path)
+    assert isinstance(sdk._mqtt_client, MqttMock)
+
+    await sdk.connect()
+
+    assert _status_publishes(sdk._mqtt_client.publish) == [
+        {
+            "event_id": "py-sdk-testid-1",
+            "type": "connection_status_changed",
+            "data": {"status": "online"},
+        }
+    ]
+    # online の publish は subscribe が済んだ後に行う
+    topics = [c.kwargs["topic"] for c in sdk._mqtt_client.publish.await_args_list]
+    assert topics == [OWN_EVENT_TOPIC]
+    assert sdk._mqtt_client.subscribe.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_disconnect_publishes_offline_shutdown(monkeypatch, tmp_path) -> None:
+    """disconnect() は offline/shutdown を通知してから切断する。"""
+    sdk = _make_sdk(monkeypatch, tmp_path)
+    assert isinstance(sdk._mqtt_client, MqttMock)
+    await sdk.connect()
+
+    await sdk.disconnect()
+
+    assert _status_publishes(sdk._mqtt_client.publish)[-1] == {
+        "event_id": "py-sdk-testid-2",
+        "type": "connection_status_changed",
+        "data": {"status": "offline", "reason": "shutdown"},
+    }
+    sdk._mqtt_client.disconnect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_disconnect_when_not_connected_skips_publish(
+    monkeypatch, tmp_path
+) -> None:
+    """未接続なら offline を publish せず切断だけ行う。"""
+    sdk = _make_sdk(monkeypatch, tmp_path)
+    assert isinstance(sdk._mqtt_client, MqttMock)
+    assert sdk._mqtt_client.is_connected() is False
+
+    await sdk.disconnect()
+
+    assert _status_publishes(sdk._mqtt_client.publish) == []
+    sdk._mqtt_client.disconnect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_disconnect_continues_when_publish_fails(monkeypatch, tmp_path) -> None:
+    """offline の通知に失敗しても切断は実行する。"""
+    sdk = _make_sdk(monkeypatch, tmp_path)
+    assert isinstance(sdk._mqtt_client, MqttMock)
+    await sdk.connect()
+    # 接続後に publish を失敗させ、offline の通知だけを失敗させる
+    sdk._mqtt_client.publish.side_effect = RuntimeError("broker gone")
+
+    await sdk.disconnect()
+
+    sdk._mqtt_client.disconnect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_async_context_manager_disconnects(monkeypatch, tmp_path) -> None:
+    """async with のブロックを抜けると disconnect() される。"""
+    sdk = _make_sdk(monkeypatch, tmp_path)
+    assert isinstance(sdk._mqtt_client, MqttMock)
+
+    async with sdk as entered:
+        assert entered is sdk
+        await sdk.connect()
+
+    sdk._mqtt_client.disconnect.assert_awaited_once()
+    assert _status_publishes(sdk._mqtt_client.publish)[-1]["data"] == {
+        "status": "offline",
+        "reason": "shutdown",
+    }
+
+
+@pytest.mark.asyncio
+async def test_reconnect_resubscribes_and_republishes_online(
+    monkeypatch, tmp_path
+) -> None:
+    """再接続を検知すると購読を張り直し、online を再通知する。"""
+    sdk = _make_sdk(monkeypatch, tmp_path)
+    assert isinstance(sdk._mqtt_client, MqttMock)
+    await sdk.connect()
+
+    # MqttPahoTls が再接続時に呼び出すハンドラを取り出して起動する
+    handler = sdk._mqtt_client.set_on_connected.call_args.args[0]
+    await handler()
+
+    assert sdk._mqtt_client.subscribe.await_count == 6
+    assert _status_publishes(sdk._mqtt_client.publish)[-1]["data"] == {
+        "status": "online"
+    }
+
+
+@pytest.mark.asyncio
+async def test_own_event_publish_is_ignored_on_receipt(
+    monkeypatch, tmp_path, caplog
+) -> None:
+    """SDK 自身が publish したイベントを受信しても、警告なく読み捨てる。
+
+    購読フィルタ romicoresdk/+/event は romi_id と sdk_id を区別できないため
+    自分の接続状態通知も届く。接続状態の payload は EventPayload ではないので、
+    トピックの段階で弾かれないと payload パースの警告が出てしまう。
+    """
+    sdk = _make_sdk(monkeypatch, tmp_path)
+    assert isinstance(sdk._mqtt_client, MqttMock)
+    await sdk.connect()
+
+    own_publish = sdk._mqtt_client.publish.await_args
+    assert own_publish.kwargs["topic"] == OWN_EVENT_TOPIC
+
+    waiting = sdk._get_event_future(EventType.TOOL_CALL_INVOKED)
+
+    with caplog.at_level(logging.WARNING, logger="romicoresdk.sdk"):
+        # ブローカーから自分の publish が返ってきた状況を再現する
+        await sdk._on_message_event(
+            topic=own_publish.kwargs["topic"],
+            payload=own_publish.kwargs["payload"],
+        )
+
+    assert caplog.records == []
+    assert not waiting.done()
+
+
+@pytest.mark.asyncio
+async def test_connect_is_idempotent(monkeypatch, tmp_path) -> None:
+    """接続済みの状態で connect() を呼び直しても失敗しない。
+
+    set_will は接続後に呼ぶとエラーになるため、接続前にしか意味のない設定は
+    スキップする必要がある。
+    """
+    sdk = _make_sdk(monkeypatch, tmp_path)
+    assert isinstance(sdk._mqtt_client, MqttMock)
+
+    # MqttPahoTls と同じく、接続後の set_will はエラーにする
+    def reject_when_connected(will) -> None:
+        if sdk._mqtt_client.is_connected():
+            raise RuntimeError("Will must be set before connecting")
+
+    sdk._mqtt_client.set_will.side_effect = reject_when_connected
+
+    await sdk.connect()
+    assert sdk._mqtt_client.is_connected() is True
+
+    # 2 回目は set_will を呼ばずに完走する
+    await sdk.connect()
+
+    assert sdk._mqtt_client.set_will.call_count == 1
+    assert sdk._mqtt_client.subscribe.await_count == 6
+    assert _status_publishes(sdk._mqtt_client.publish)[-1]["data"] == {
+        "status": "online"
+    }

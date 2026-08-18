@@ -3,7 +3,13 @@ from paho.mqtt.enums import CallbackAPIVersion
 from paho.mqtt.client import Client, ConnectFlags, DisconnectFlags
 from paho.mqtt.reasoncodes import ReasonCode
 from paho.mqtt.properties import Properties
-from .mqtt_protocol import MessageHandler, MqttEndpoint, TlsConfig
+from .mqtt_protocol import (
+    ConnectedHandler,
+    MessageHandler,
+    MqttEndpoint,
+    TlsConfig,
+    Will,
+)
 from typing import Any
 import asyncio
 import logging
@@ -64,6 +70,9 @@ class MqttPahoTls:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._connect_future: asyncio.Future[None] | None = None
         self._disconnect_future: asyncio.Future[None] | None = None
+        self._on_connected_handler: ConnectedHandler | None = None
+        # 初回接続を済ませたかどうか。再接続の判定に使う。
+        self._has_connected = False
 
     async def connect(self, timeout: float):
         """clientの接続
@@ -85,6 +94,9 @@ class MqttPahoTls:
             return
         self._loop = asyncio.get_running_loop()
         self._connect_future = self._loop.create_future()
+        # 明示的な connect は「初回接続」として扱う。切断後に再度 connect を
+        # 呼び直した場合も、自動再接続ではなくこちらの経路で完了を待つ。
+        self._has_connected = False
         self._client.connect_async(
             self._mqtt_endpoint.host,
             self._mqtt_endpoint.port,
@@ -227,6 +239,54 @@ class MqttPahoTls:
         """
         return self._client.is_connected()
 
+    def set_will(self, will: Will) -> None:
+        """LWT (Last Will and Testament) を設定する
+
+        正常な DISCONNECT を経ずに接続が切れた場合に、ブローカーが代理で
+        パブリッシュするメッセージを登録します。
+
+        Parameters
+        ----------
+        will : Will
+            LWT の設定
+
+        Raises
+        ------
+        RuntimeError
+            既に接続済み、または接続処理が進行中の場合。LWT は CONNECT
+            パケットに載せてブローカーへ渡すため、あとから設定しても現在の
+            接続には反映されません。
+        """
+        if self._client.is_connected() or self._is_connecting():
+            raise RuntimeError("Will must be set before connecting")
+        self._client.will_set(
+            will.topic, will.payload, qos=will.qos, retain=will.retain
+        )
+
+    def _is_connecting(self) -> bool:
+        """
+        接続処理が進行中かどうかを返すメソッドです
+
+        connect() が connect_async を呼んでから CONNACK を受け取るまでの間は
+        is_connected() が偽のままですが、CONNECT パケットは既に送出されている
+        可能性があるため、この間の LWT 設定は現在の接続に間に合いません。
+        """
+        return self._connect_future is not None and not self._connect_future.done()
+
+    def set_on_connected(self, handler: ConnectedHandler) -> None:
+        """再接続時に呼ばれるハンドラを設定する
+
+        ブローカーとの接続が切れた後、クライアントが自動再接続に成功した
+        タイミングで呼ばれます。初回接続では呼ばれません（初回は
+        :meth:`connect` の呼び出し側が同期的に処理するため）。
+
+        Parameters
+        ----------
+        handler : ConnectedHandler
+            再接続時に呼び出される非同期ハンドラ
+        """
+        self._on_connected_handler = handler
+
     def _on_connect(
         self,
         client: Client,
@@ -239,15 +299,48 @@ class MqttPahoTls:
         接続完了時のコールバックメソッドです
         """
         if not reason_code.is_failure:
-            logger.info("Connected successfully")
-            if self._connect_future and not self._connect_future.done() and self._loop:
-                self._loop.call_soon_threadsafe(self._connect_future.set_result, None)
+            if not self._has_connected:
+                # 初回接続。subscribe や online 通知は connect() の呼び出し側が
+                # 同期的に行うため、ここでは future を解決するだけにする。
+                logger.info("Connected successfully")
+                self._has_connected = True
+                if (
+                    self._connect_future
+                    and not self._connect_future.done()
+                    and self._loop
+                ):
+                    self._loop.call_soon_threadsafe(
+                        self._connect_future.set_result, None
+                    )
+                return
+
+            # 自動再接続。clean session により購読が失われているため、
+            # 購読の復旧などをハンドラへ委譲する。
+            logger.info("Reconnected successfully")
+            if self._on_connected_handler is not None and self._loop:
+                self._loop.call_soon_threadsafe(
+                    asyncio.create_task, self._run_on_connected()
+                )
         else:
             if self._connect_future and not self._connect_future.done() and self._loop:
                 error = Exception(f"Failed to connect. Reason: {reason_code}")
                 self._loop.call_soon_threadsafe(
                     self._connect_future.set_exception, error
                 )
+
+    async def _run_on_connected(self) -> None:
+        """
+        再接続ハンドラを実行するメソッドです
+
+        paho のコールバック起点のタスクとして実行されるため、例外が
+        呼び出し元へ伝播しません。握り潰さずログに残します。
+        """
+        if self._on_connected_handler is None:
+            return
+        try:
+            await self._on_connected_handler()
+        except Exception:
+            logger.exception("Failed to handle reconnection")
 
     def _on_disconnect(
         self,
