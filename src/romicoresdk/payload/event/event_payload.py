@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 from ..generic_payload import EventPayloadBase
 from .data.requested_tool_call import RequestedToolCall
 from .data.conversation_streaming_event import ConversationStreamingEventData
+from .data.connection_status import ConnectionStatusData
 
 
 class EventType(StrEnum):
@@ -15,6 +16,9 @@ class EventType(StrEnum):
     # Romi -> SDK へ送られてくるイベント
     TOOL_CALL_INVOKED = "tool_call_invoked"
     CONVERSATION_STREAMING = "conversation_streaming"
+
+    # SDK <-> Romi の双方向で送られるイベント
+    CONNECTION_STATUS_CHANGED = "connection_status_changed"
 
 
 class ToolCallInvokedEventPayload(
@@ -31,8 +35,16 @@ class ConversationStreamingEventPayload(
     """conversation_streaming event のペイロード。"""
 
 
+class ConnectionStatusChangedEventPayload(
+    EventPayloadBase[Literal[EventType.CONNECTION_STATUS_CHANGED], ConnectionStatusData]
+):
+    """connection_status_changed event のペイロード。"""
+
+
 EventPayload = Annotated[
-    ToolCallInvokedEventPayload | ConversationStreamingEventPayload,
+    ToolCallInvokedEventPayload
+    | ConversationStreamingEventPayload
+    | ConnectionStatusChangedEventPayload,
     Discriminator("type"),
 ]
 

@@ -34,6 +34,19 @@ class TopicNameManager:
         """
         return self._build_topic("broadcast", self._sdk_id, self.REQUEST_SUFFIX)
 
+    def get_publish_event_topic(self) -> str:
+        """SDK がイベントを publish するトピックを取得する。
+
+        フォーマット:
+            romicoresdk/{sdk_id}/event
+
+        Returns
+        -------
+        str
+            SDK がイベントを publish するトピック
+        """
+        return self._build_topic(self._sdk_id, self.EVENT_SUFFIX)
+
     def get_unicast_request_topic(self, romi_id: str) -> str:
         """指定された romi_id 向けのユニキャストリクエストトピックを取得する。
 

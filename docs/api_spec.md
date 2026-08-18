@@ -10,6 +10,7 @@ icon: lucide/file-code
       members:
         - create
         - connect
+        - disconnect
         - discover_romis
 
 
