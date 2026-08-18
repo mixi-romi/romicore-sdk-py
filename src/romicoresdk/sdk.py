@@ -5,7 +5,7 @@ import secrets
 import base64
 from importlib.metadata import PackageNotFoundError, version as _package_version
 from typing import Awaitable, Callable, Generic, Self, TypeVar
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ValidationError
 from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
@@ -18,7 +18,8 @@ from .payload.request_type import RequestType
 from .payload.error_info import ErrorInfo
 from .payload.adapters import PayloadAdapters, DEFAULT_ADAPTERS
 from .payload.unicast.from_romi_request_payload import FromRomiRequestPayload
-from .payload.event.event_payload import EventType, EventPayload, EventData
+from .payload.event.event_payload import EventType
+from .payload.event.data.base import EventData
 from .payload.broadcast.data.discover_available_romis_request import (
     DiscoverAvailableRomisRequestData,
     SdkCapabilityDeclaration,
@@ -374,7 +375,7 @@ class SDK(Generic[RomiT]):
 
         # parse payload
         try:
-            event_payload = TypeAdapter(EventPayload).validate_json(payload)
+            event_payload = self._adapters.event.validate_json(payload)
         except ValidationError as e:
             logger.warning(f"Received invalid event payload: {e}")
             return

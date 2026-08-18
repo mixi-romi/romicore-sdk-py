@@ -9,6 +9,7 @@ from romicoresdk.payload.unicast.from_romi_response_payload import (
 from romicoresdk.payload.broadcast.broadcast_request_payload import (
     BroadcastRequestPayload,
 )
+from romicoresdk.payload.event.event_payload import EventPayload
 from pydantic import TypeAdapter
 
 
@@ -48,3 +49,4 @@ generate_and_save_schema(ToRomiRequestPayload, "to_romi_request_payload.yaml")
 generate_and_save_schema(FromRomiRequestPayload, "from_romi_request_payload.yaml")
 generate_and_save_schema(ToRomiResponsePayload, "to_romi_response_payload.yaml")
 generate_and_save_schema(FromRomiResponsePayload, "from_romi_response_payload.yaml")
+generate_and_save_schema(EventPayload, "event_payload.yaml")
