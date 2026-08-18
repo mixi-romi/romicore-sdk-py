@@ -25,7 +25,8 @@ from .payload.unicast.from_romi_request_payload import (
 )
 from .payload.request_type import RequestType
 from .payload.error_info import ErrorInfo
-from .payload.event.event_payload import EventType, EventData
+from .payload.event.event_payload import EventType
+from .payload.event.data.base import EventData
 from .payload.event.data.conversation_streaming_event import (
     ConversationStreamingEventData,
 )

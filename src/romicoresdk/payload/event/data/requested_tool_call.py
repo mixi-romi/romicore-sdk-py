@@ -1,8 +1,10 @@
 from typing import Annotated
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from .base import EventData
 
 
-class RequestedToolCall(BaseModel):
+class RequestedToolCall(EventData):
     """
     Romiからツールの呼び出し要求を受信するペイロードクラス
     """
